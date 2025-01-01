@@ -1,5 +1,7 @@
 #!/bin/bash
 
+#Script for creating 50GB capacity ZNS emulation
+
 ZONE_SZ=1024 #Mega Byte
 BLOCK_SZ=4096 #Byte
 NR_ZONE=50
