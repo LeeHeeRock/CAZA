@@ -50,8 +50,8 @@ using std::fixed;
 /* Minimum of number of zones that makes sense */
 #define ZENFS_MIN_ZONES (32)
 
-/* Reserved Zone for Zone Cleaning, Set as 5 since there are five types of lietime in Rocksdb*/
-#define RESERVED_ZONE_FOR_CLEANING (10)
+/* Reserved Zone for Zone Cleaning */
+#define RESERVED_ZONE_FOR_CLEANING (5)
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -973,7 +973,7 @@ Zone *ZonedBlockDevice::AllocateZone(Env::WriteLifeTimeHint file_lifetime, Inter
   }
 
   //Find the Empty Zone First
-  if (!allocated_zone) {
+  if (!allocated_zone && level != 100) {
     if (active_io_zones_.load() < max_nr_active_io_zones_) {
       for (const auto z : io_zones) {
        if ((!z->open_for_write_) && z->IsEmpty()) {
@@ -1239,6 +1239,16 @@ Zone *ZonedBlockDevice::AllocateZoneForCleaning() {
     });
   }
 
+  for (auto it = reserved_zones.begin(); it != reserved_zones.end(); ) {
+    if ((*it)->open_for_write_) {
+      io_zones.push_back(*it);
+      it = reserved_zones.erase(it);
+    } else {
+      allocated_zone = *it;
+      break;
+    }
+  }
+
   allocated_zone = reserved_zones[0];
 
   if (!allocated_zone) {
@@ -1246,6 +1256,10 @@ Zone *ZonedBlockDevice::AllocateZoneForCleaning() {
       fprintf(stderr, "Allocate Zone Failed While Running Zone Cleaning!\n");
       exit(1);
   }
+  if (allocated_zone->open_for_write_) {
+    printZoneStatus(reserved_zones);
+  }
+
   assert(!allocated_zone->open_for_write_);
   allocated_zone->open_for_write_ = true;
   open_io_zones_++;
@@ -1510,6 +1524,7 @@ int ZonedBlockDevice::ZoneCleaning(int nr_reset) {
           if ((*it)->zone_id_ == cur_victim->zone_id_) {
             if (reserved_zones.size() < RESERVED_ZONE_FOR_CLEANING){
               io_zones.erase(it);
+              assert(!cur_victim->open_for_write_);
               reserved_zones.push_back(cur_victim);
             }
             break;
@@ -1525,7 +1540,7 @@ int ZonedBlockDevice::ZoneCleaning(int nr_reset) {
     for ( auto it = reserved_zones.begin(); it !=reserved_zones.end(); ){
         if ( !((*it)->IsEmpty()) || ((*it)->IsUsed())) {
             io_zones.push_back(*it);
-            reserved_zones.erase(it);
+            it = reserved_zones.erase(it);
         } else {
             ++it;
         }
@@ -1533,8 +1548,9 @@ int ZonedBlockDevice::ZoneCleaning(int nr_reset) {
     if (reserved_zones.size() < RESERVED_ZONE_FOR_CLEANING) {
       for ( auto it = io_zones.begin(); it !=io_zones.end(); ){
        if ( ((*it)->IsEmpty()) && !((*it)->open_for_write_)) {
+            assert(!((*it)->open_for_write_));
             reserved_zones.push_back(*it);
-            io_zones.erase(it);
+            it = io_zones.erase(it);
         } else {
             ++it;
         }
@@ -1550,7 +1566,7 @@ int ZonedBlockDevice::ZoneCleaning(int nr_reset) {
         if ( reserved_zones.size() != RESERVED_ZONE_FOR_CLEANING) {
             assert((*it)->IsEmpty() && !((*it)->open_for_write_));
             io_zones.push_back(*it);
-            reserved_zones.erase(it);
+            it = reserved_zones.erase(it);
         } else {
             ++it;
         }
